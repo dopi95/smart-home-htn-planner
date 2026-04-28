@@ -44,6 +44,7 @@ STATE_META = {
     "power_available": ("⚡", "Power"),
     "someone_home":    ("🏠", "Home"),
     "coffee_maker_ok": ("🔧", "Maker"),
+    "guest_mode":      ("👤", "Guest"),
 }
 
 SCENARIOS = [
@@ -74,6 +75,20 @@ SCENARIOS = [
         "goal":        ["MorningRoutine"],
         "state_patch": {"coffee_maker_ok": False},
         "icon":        "🔧",
+    },
+    {
+        "title":       "Guest Mode Evening",
+        "subtitle":    "Security only, skip comfort",
+        "goal":        ["EveningRoutine"],
+        "state_patch": {"guest_mode": True, "someone_home": False},
+        "icon":        "👤",
+    },
+    {
+        "title":       "Door Already Locked",
+        "subtitle":    "lock_door fails → backtrack",
+        "goal":        ["SecureHome"],
+        "state_patch": {"door_locked": True, "someone_home": False},
+        "icon":        "🚫",
     },
 ]
 
@@ -387,7 +402,10 @@ class HTNApp(tk.Tk):
         plan, final_state = htn_plan(sc["goal"], state, root)
 
         if plan is None:
-            self._status.configure(text="Planning failed – no applicable method.")
+            self._status.configure(
+                text=f"⚠  Planning failed for '{sc['title']}' – no applicable method or primitive failed.")
+            self._plan_lbl.configure(text="Planning failed")
+            self._tree_sub.configure(text=f"— {sc['title']} (failed)")
             return
 
         self._G       = build_graph(root)

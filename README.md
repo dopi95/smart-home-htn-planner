@@ -9,7 +9,8 @@ The planner decomposes high-level goals into sequences of primitive actions, vis
 
 ```bash
 pip install matplotlib networkx
-python main.py
+python main.py            # full desktop GUI
+python main.py --no-gui   # terminal fallback (no display needed)
 ```
 
 **Requirements:** Python 3.9+, `matplotlib`, `networkx` (both explicitly allowed by the assignment). `tkinter` is built into Python.
@@ -47,8 +48,9 @@ The domain models an intelligent home automation system. The **world state** is 
 | `power_available` | Whether mains power is available             | `True`        |
 | `someone_home`    | Whether a resident is currently home         | `True`        |
 | `coffee_maker_ok` | Whether the coffee maker is functional       | `True`        |
+| `guest_mode`      | Whether guest mode is active                 | `False`       |
 
-The last three keys (`power_available`, `someone_home`, `coffee_maker_ok`) are **condition flags** — they are never changed by actions, only read by method preconditions to decide which plan to execute.
+The last four keys (`power_available`, `someone_home`, `coffee_maker_ok`, `guest_mode`) are **condition flags** — they are never changed by actions, only read by method preconditions to decide which plan to execute.
 
 ---
 
@@ -81,12 +83,13 @@ Prepares the house for the morning.
 | `no_coffee`   | `coffee_maker_ok == False` | `turn_on_lights` → `set_thermostat`                         |
 
 #### `SecureHome`
-Secures the house depending on occupancy.
+Secures the house depending on occupancy and door state.
 
-| Method           | Precondition             | Subtasks                                               |
-|------------------|--------------------------|--------------------------------------------------------|
-| `full_security`  | `someone_home == False`  | `lock_door` → `close_blinds` → `turn_off_devices`     |
-| `light_security` | `someone_home == True`   | `lock_door`                                            |
+| Method               | Precondition                                      | Subtasks                                       |
+|----------------------|---------------------------------------------------|------------------------------------------------|
+| `full_security`      | `someone_home == False` and `door_locked == False` | `lock_door` → `close_blinds` → `turn_off_devices` |
+| `door_already_locked`| `someone_home == False` and `door_locked == True`  | `close_blinds` → `turn_off_devices`            |
+| `light_security`     | `someone_home == True`                            | `lock_door`                                    |
 
 #### `ComfortSetup`
 Sets up comfort systems, with a fallback for power failures.
@@ -97,11 +100,12 @@ Sets up comfort systems, with a fallback for power failures.
 | `power_outage`   | `power_available == False`  | `send_alert`                        |
 
 #### `EveningRoutine`
-Runs the full evening sequence — always decomposes into `SecureHome` then `ComfortSetup`, which themselves branch based on state.
+Runs the evening sequence — branches based on guest mode.
 
-| Method             | Precondition | Subtasks                        |
-|--------------------|--------------|----------------------------------|
-| `standard_evening` | always       | `SecureHome` → `ComfortSetup`   |
+| Method             | Precondition          | Subtasks                        |
+|--------------------|-----------------------|----------------------------------|
+| `guest_evening`    | `guest_mode == True`  | `SecureHome`                    |
+| `standard_evening` | `guest_mode == False` | `SecureHome` → `ComfortSetup`   |
 
 ---
 
@@ -240,14 +244,16 @@ This tree is exactly what the GUI renders in the **Decomposition Tree** panel. E
 
 ## 4. All Scenarios
 
-The GUI provides four pre-built scenarios, each demonstrating a different branch of the domain:
+The GUI provides six pre-built scenarios, each demonstrating a different branch of the domain:
 
-| # | Scenario              | Key State Change          | Method(s) Chosen                          | Final Plan                                                                 |
-|---|-----------------------|---------------------------|-------------------------------------------|----------------------------------------------------------------------------|
-| 1 | Morning Routine       | `coffee_maker_ok = True`  | `with_coffee`                             | `turn_on_lights` → `start_coffee_maker` → `set_thermostat`                |
-| 2 | Evening – Nobody Home | `someone_home = False`    | `full_security` + `normal_comfort`        | `lock_door` → `close_blinds` → `turn_off_devices` → `set_thermostat` → `turn_on_lights` |
-| 3 | Power Outage          | `power_available = False` | `power_outage`                            | `send_alert`                                                               |
-| 4 | Broken Coffee Maker   | `coffee_maker_ok = False` | `no_coffee`                               | `turn_on_lights` → `set_thermostat`                                        |
+| # | Scenario              | Key State Change                                  | Method(s) Chosen                          | Final Plan                                                                 |
+|---|-----------------------|---------------------------------------------------|-------------------------------------------|----------------------------------------------------------------------------|
+| 1 | Morning Routine       | `coffee_maker_ok = True`                          | `with_coffee`                             | `turn_on_lights` → `start_coffee_maker` → `set_thermostat`                |
+| 2 | Evening – Nobody Home | `someone_home = False`                            | `standard_evening` + `full_security` + `normal_comfort` | `lock_door` → `close_blinds` → `turn_off_devices` → `set_thermostat` → `turn_on_lights` |
+| 3 | Power Outage          | `power_available = False`                         | `power_outage`                            | `send_alert`                                                               |
+| 4 | Broken Coffee Maker   | `coffee_maker_ok = False`                         | `no_coffee`                               | `turn_on_lights` → `set_thermostat`                                        |
+| 5 | Guest Mode Evening    | `guest_mode = True`, `someone_home = False`       | `guest_evening` + `full_security`         | `lock_door` → `close_blinds` → `turn_off_devices`                         |
+| 6 | Door Already Locked   | `door_locked = True`, `someone_home = False`      | `door_already_locked`                     | `close_blinds` → `turn_off_devices`                                        |
 
 ---
 
@@ -299,20 +305,20 @@ The planner executes subtasks strictly left-to-right in the order they appear in
 **2. Preconditions are evaluated once per compound task.**  
 Method preconditions are evaluated against the state at the time the compound task is reached. If a subtask changes the state in a way that would affect a sibling compound task's method choice, that is handled correctly (because `mid_state` is passed forward). However, there is no re-planning if the world changes unexpectedly during execution.
 
-**3. No real-world execution feedback.**  
-The planner assumes all primitive tasks succeed. In a real smart home, a task like `lock_door` could fail (door sensor error, mechanical fault). The engine has the `(success, new_state)` return structure to support this, but the domain always returns `True`.
+**3. Limited real-world execution feedback.**  
+Most primitive tasks always succeed. The `lock_door` primitive demonstrates failure handling (returns `False` if the door is already locked), and the engine correctly backtracks to try the next method. However, in a real smart home, many more tasks could fail unpredictably.
 
 **4. State is fully observable and deterministic.**  
 The planner has complete knowledge of the world state at all times. There is no support for uncertainty, partial observability, or probabilistic outcomes — all of which are common in real HTN applications.
 
 **5. Fixed scenario set.**  
-The four scenarios are hardcoded. There is no interface to define a custom initial state or goal at runtime without editing `domain.py` or `ui.py` directly.
+The six scenarios are hardcoded. There is no interface to define a custom initial state or goal at runtime without editing `domain.py` or `ui.py` directly.
 
 **6. Single-goal planning only.**  
 The engine plans for one top-level goal at a time. There is no support for goal prioritization, interleaved plans, or concurrent task execution.
 
-**7. No cycle detection.**  
-If a compound task's method decomposed into itself (directly or indirectly), the engine would recurse infinitely. The current domain has no cycles, but the engine does not guard against them.
+**7. Cycle detection implemented.**  
+The engine tracks the compound task call stack in `_visited` and fails planning if a cycle is detected. This prevents infinite recursion if a compound task's method decomposes into itself (directly or indirectly).
 
 ---
 

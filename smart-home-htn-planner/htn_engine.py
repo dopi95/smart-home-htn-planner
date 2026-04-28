@@ -14,7 +14,7 @@ class TreeNode:
         self.children.append(node)
 
 
-def htn_plan(tasks, state, parent_node=None):
+def htn_plan(tasks, state, parent_node=None, _visited=None):
     """
     Recursively decompose `tasks` given `state`.
 
@@ -26,7 +26,13 @@ def htn_plan(tasks, state, parent_node=None):
 
     Backtracking: if a chosen method's subtasks fail, the node is removed
     and the next method is tried.
+
+    Cycle detection: _visited tracks the compound task call stack;
+    if a task appears while it is already being decomposed, planning fails.
     """
+    if _visited is None:
+        _visited = set()
+
     if not tasks:
         return [], state
 
@@ -44,7 +50,7 @@ def htn_plan(tasks, state, parent_node=None):
             return None, None
 
         # rest tasks belong to the SAME parent (siblings, not children)
-        plan_rest, final_state = htn_plan(rest, new_state, parent_node)
+        plan_rest, final_state = htn_plan(rest, new_state, parent_node, _visited)
         if plan_rest is None:
             return None, None
 
@@ -52,23 +58,23 @@ def htn_plan(tasks, state, parent_node=None):
 
     # ── Compound task ─────────────────────────────────────────────────────
     if task in METHODS:
+        if task in _visited:          # cycle detected
+            return None, None
+        _visited = _visited | {task}  # immutable update — siblings are unaffected
+
         for method_name, precondition, subtasks in METHODS[task]:
             if precondition(state):
                 node = TreeNode(task, kind="compound", method=method_name)
                 if parent_node is not None:
                     parent_node.add_child(node)
 
-                # subtasks → children of THIS compound node
-                # rest     → siblings, attach to parent_node (not node)
-                # This separation is critical for correct tree structure.
-                plan_sub, mid_state = htn_plan(subtasks, state, node)
+                plan_sub, mid_state = htn_plan(subtasks, state, node, _visited)
                 if plan_sub is None:
-                    # undo: remove the node we just added
                     if parent_node is not None:
                         parent_node.children.remove(node)
                     continue
 
-                plan_rest, final_state = htn_plan(rest, mid_state, parent_node)
+                plan_rest, final_state = htn_plan(rest, mid_state, parent_node, _visited)
                 if plan_rest is None:
                     if parent_node is not None:
                         parent_node.children.remove(node)

@@ -19,6 +19,7 @@ def initial_state():
         "power_available":  True,   # drives method choice in ComfortSetup
         "someone_home":     True,   # drives method choice in SecureHome
         "coffee_maker_ok":  True,   # drives method choice in MorningRoutine
+        "guest_mode":       False,  # drives method choice in EveningRoutine
     }
 
 
@@ -29,6 +30,9 @@ def turn_on_lights(state):
     s = dict(state); s["lights_on"] = True;       return True, s
 
 def lock_door(state):
+    # Fails if door is already locked — exercises the primitive failure path
+    if state["door_locked"]:
+        return False, state
     s = dict(state); s["door_locked"] = True;     return True, s
 
 def set_thermostat(state):
@@ -83,13 +87,19 @@ METHODS = {
     ],
 
     # SecureHome
-    # Method 1: nobody home → lock + close blinds + turn off devices
-    # Method 2: someone home → just lock the door
+    # Method 1: nobody home, door not yet locked → full lock + blinds + devices
+    # Method 2: nobody home, door already locked → blinds + devices only
+    # Method 3: someone home → just lock the door
     "SecureHome": [
         (
             "full_security",
-            lambda s: not s["someone_home"],
+            lambda s: not s["someone_home"] and not s["door_locked"],
             ["lock_door", "close_blinds", "turn_off_devices"],
+        ),
+        (
+            "door_already_locked",
+            lambda s: not s["someone_home"] and s["door_locked"],
+            ["close_blinds", "turn_off_devices"],
         ),
         (
             "light_security",
@@ -114,12 +124,18 @@ METHODS = {
         ),
     ],
 
-    # EveningRoutine (bonus compound) 
-    # Always: secure home then comfort setup
+    # EveningRoutine
+    # Method 1: guest mode active → only secure home (skip comfort setup)
+    # Method 2: normal evening    → secure home then comfort setup
     "EveningRoutine": [
         (
+            "guest_evening",
+            lambda s: s["guest_mode"],
+            ["SecureHome"],
+        ),
+        (
             "standard_evening",
-            lambda s: True,
+            lambda s: not s["guest_mode"],
             ["SecureHome", "ComfortSetup"],
         ),
     ],
